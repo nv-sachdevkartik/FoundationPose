@@ -15,6 +15,7 @@ import torch
 import torch.distributed as dist
 from omegaconf import OmegaConf
 from tqdm import tqdm
+import onnxruntime as ort
 code_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(f'{code_dir}/../../../')
 from learning.datasets.h5_dataset import *
@@ -22,7 +23,10 @@ from learning.models.score_network import *
 from learning.datasets.pose_dataset import *
 from Utils import *
 from datareader import *
-
+import onnxruntime as ort
+import tensorrt as trt
+from onnx_tensorrt import tensorrt_engine
+from .tensorrt_infer2 import TensorRTInfer
 
 def vis_batch_data_scores(pose_data, ids, scores, pad_margin=5):
   assert len(scores)==len(ids)
@@ -115,15 +119,34 @@ def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_rati
 
 
 class ScorePredictor:
-  def __init__(self, amp=True):
+  def __init__(self, amp=True, runtime='torch'):
     self.amp = amp
     self.run_name = "2024-01-11-20-02-45"
+    self.use_onnx = False
 
     model_name = 'model_best.pth'
     code_dir = os.path.dirname(os.path.realpath(__file__))
     ckpt_dir = f'{code_dir}/../../weights/{self.run_name}/{model_name}'
-
+    
+    # Load config first, before using it
     self.cfg = OmegaConf.load(f'{code_dir}/../../weights/{self.run_name}/config.yml')
+    
+    self.runtime = runtime
+    if self.runtime == 'onnx':
+      self.onnx_path = f'{code_dir}/../../weights/{self.run_name}/model_best.onnx'
+      self.onnx_session = None
+      self.load_onnx_model()
+    elif self.runtime == 'tensorrt':
+      self.engine_path = f'{code_dir}/../../weights/{self.run_name}/model_best_dynamic.plan'
+      self.trt_infer = TensorRTInfer(self.engine_path, batch_size=1, verbose=False)
+    else:
+      self.model = ScoreNetMultiPair(cfg=self.cfg, c_in=self.cfg['c_in']).cuda()
+      logging.info(f"Using pretrained model from {ckpt_dir}")
+      ckpt = torch.load(ckpt_dir)
+      if 'model' in ckpt:
+        ckpt = ckpt['model']
+      self.model.load_state_dict(ckpt)
+      self.model.cuda().eval()
 
     self.cfg['ckpt_dir'] = ckpt_dir
     self.cfg['enable_amp'] = True
@@ -145,17 +168,89 @@ class ScorePredictor:
     logging.info(f"self.cfg: \n {OmegaConf.to_yaml(self.cfg)}")
 
     self.dataset = ScoreMultiPairH5Dataset(cfg=self.cfg, mode='test', h5_file=None, max_num_key=1)
-    self.model = ScoreNetMultiPair(cfg=self.cfg, c_in=self.cfg['c_in']).cuda()
-
-    logging.info(f"Using pretrained model from {ckpt_dir}")
-    ckpt = torch.load(ckpt_dir)
-    if 'model' in ckpt:
-      ckpt = ckpt['model']
-    self.model.load_state_dict(ckpt)
-
-    self.model.cuda().eval()
+    
     logging.info("init done")
 
+  # def load_engine_model(self):
+  #   try:
+  #     if not os.path.exists(self.engine_path):
+  #       raise FileNotFoundError(f"TensorRT engine file not found: {self.engine_path}")
+      
+  #     logging.info(f"Loading TensorRT engine from {self.engine_path}")
+  #     runtime = trt.Runtime(trt.Logger(trt.Logger.WARNING))
+
+  #     with open(self.engine_path, 'rb') as file:
+  #       engine_data = file.read()
+  #       engine = runtime.deserialize_cuda_engine(engine_data) 
+  #     self.engine = tensorrt_engine.Engine(engine)
+
+  #     if self.engine is None:
+  #       raise RuntimeError("Failed to convert TensorRT engine")
+  #       logging.info("TensorRT engine converted failed")
+
+  #     # if len(engine_data) == 0:
+  #     #   raise ValueError(f"TensorRT engine file is empty: {self.engine_path}")
+      
+  #     # Wrap with onnx_tensorrt Engine class
+  #     # self.engine = tensorrt_engine.Engine(engine)
+  #     logging.info("TensorRT engine loaded successfully")
+      
+  #   except Exception as e:
+  #     logging.error(f"Failed to load TensorRT engine: {e}")
+
+  # def load_engine_model(self):
+  #   try:
+  #     if not os.path.exists(self.engine_path):
+  #       raise FileNotFoundError(f"TensorRT engine file not found: {self.engine_path}")
+      
+  #     logging.info(f"Loading TensorRT engine from {self.engine_path}")
+  #     with open(self.engine_path, 'rb') as file:
+  #       engine_data = file.read()
+      
+  #     if len(engine_data) == 0:
+  #       raise ValueError(f"TensorRT engine file is empty: {self.engine_path}")
+      
+  #     # Create TensorRT runtime and deserialize engine
+  #     runtime = trt.Runtime(trt.Logger(trt.Logger.WARNING))
+  #     engine = runtime.deserialize_cuda_engine(engine_data)
+      
+  #     if engine is None:
+  #       raise RuntimeError("Failed to deserialize TensorRT engine")
+      
+  #     # Wrap with onnx_tensorrt Engine class
+  #     self.engine = tensorrt_engine.Engine(engine)
+  #     logging.info("TensorRT engine loaded successfully")
+      
+  #   except Exception as e:
+  #     logging.error(f"Failed to load TensorRT engine: {e}")
+  
+  def load_onnx_model(self):
+    """Load ONNX model and switch to ONNX inference mode."""
+    if not os.path.exists(self.onnx_path):
+      logging.info(f"Converting PyTorch model to ONNX format at {self.onnx_path}")
+      dummy_A = torch.ones((1, 6, 160, 160)).to('cuda')
+      dummy_B = torch.ones((1, 6, 160, 160)).to('cuda')
+      dummy_L = 1
+      torch.onnx.export(
+          self.model, 
+          (dummy_A, dummy_B, dummy_L),
+          self.onnx_path,
+          input_names=['input1', 'input2'],
+          output_names=['output1'],
+          export_params=True,
+          opset_version=17,
+          do_constant_folding=True,
+          dynamic_axes={
+              'input1': {0: 'batch_size'},
+              'input2': {0: 'batch_size'},
+              'output1': {0: 'batch_size'}
+          }
+      )
+    
+    logging.info(f"Loading ONNX model from {self.onnx_path}")
+    self.onnx_session = ort.InferenceSession(self.onnx_path, providers=['CUDAExecutionProvider'])
+    self.use_onnx = True
+    logging.info("ScorePredictor ONNX model loaded successfully")
 
   @torch.inference_mode()
   def predict(self, rgb, depth, K, ob_in_cams, normal_map=None, get_vis=False, mesh=None, mesh_tensors=None, glctx=None, mesh_diameter=None):
@@ -190,9 +285,28 @@ class ScorePredictor:
         if pose_data.normalAs is not None:
           A = torch.cat([A, pose_data.normalAs.cuda().float()], dim=1)
           B = torch.cat([B, pose_data.normalBs.cuda().float()], dim=1)
-        with torch.cuda.amp.autocast(enabled=self.amp):
-          output = self.model(A, B, L=len(A))
-        scores_cur = output["score_logit"].float().reshape(-1)
+        
+        if self.use_onnx:
+          logging.info("ScorePredictor using onnx")
+          # Run ONNX inference (inputs are already in NCHW format)
+          A = A.permute(0, 2, 3, 1).contiguous()  # NCHW -> NHWC
+          B = B.permute(0, 2, 3, 1).contiguous()  # NCHW -> NHWC
+          onnx_inputs = {
+            'input1': A.cpu().numpy(),
+            'input2': B.cpu().numpy()
+          }
+          onnx_outputs = self.onnx_session.run(None, onnx_inputs)
+          scores_cur = torch.from_numpy(onnx_outputs[0]).cuda().float().reshape(-1)
+
+        elif self.runtime == 'tensorrt':
+          logging.info("ScorePredictor using tensorrt")
+          output = self.trt_infer.infer([A.cpu().numpy(), B.cpu().numpy()])
+          scores_cur = torch.from_numpy(output[0]).cuda().float().reshape(-1)
+        
+        else:
+          with torch.cuda.amp.autocast(enabled=self.amp):
+            output = self.model(A, B, L=len(A))
+          scores_cur = output["score_logit"].float().reshape(-1)
         ids.append(scores_cur.argmax()+b)
         scores.append(scores_cur)
       ids = torch.stack(ids, dim=0).reshape(-1)

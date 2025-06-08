@@ -1,7 +1,7 @@
-# FoundationPose: Unified 6D Pose Estimation and Tracking of Novel Objects
+# Fork of FoundationPose: Unified 6D Pose Estimation and Tracking of Novel Objects
 [[Paper]](https://arxiv.org/abs/2312.08344) [[Website]](https://nvlabs.github.io/FoundationPose/)
 
-This is the official implementation of our paper to be appeared in CVPR 2024 (Highlight)
+This is a fork of the [FoundationPose](https://github.com/NVlabs/FoundationPose) repository.
 
 Contributors: Bowen Wen, Wei Yang, Jan Kautz, Stan Birchfield
 
@@ -220,3 +220,65 @@ The code and data are released under the NVIDIA Source Code License. Copyright Â
 
 # Contact
 For questions, please contact [Bowen Wen](https://wenbowen123.github.io/).
+
+## Notes
+weights
+2024-01-11-20-02-45 -> score_model.onnx -> model_best.onnx
+2023-10-28-18-33-37 -> refine_model.onnx -> model_best.onnx
+
+```bash
+python run_demo.py --use_onnx
+```
+
+installations
+
+```bash
+
+pip install tensorrt
+pip install pycuda
+pip3 install cuda-python
+
+Follow instructions from FS
+```
+
+```bash
+docker pull nvcr.io/nvidia/tensorrt:25.05-py3
+
+xhost +local:docker
+export DIR=$(pwd)
+docker run --gpus all \
+    --env NVIDIA_DISABLE_REQUIRE=1 \
+    -it \
+    --network=host \
+    --name tensorrt \
+    --cap-add=SYS_PTRACE \
+    --security-opt seccomp=unconfined \
+    -v $DIR:$DIR \
+    -v /tmp/.X11-unix:/tmp/.X11-unix \
+    -v /tmp:/tmp  \
+    --ipc=host \
+    -e DISPLAY=${DISPLAY} \
+    nvcr.io/nvidia/tensorrt:25.05-py3
+
+
+apt install ./nv-tensorrt-local-repo-ubuntu2204-10.11.0-cuda-12.9_1.0-1_amd64.deb
+
+# converting to tensorrt
+# refine_model
+trtexec --onnx=./refine_model.onnx --saveEngine=./model_best_dynamic.plan --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6 --explicitBatch --vc
+
+# score_model
+trtexec --onnx=./model_best.onnx --saveEngine=./model_best_dynamic.plan --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6 --vc
+
+
+trtexec --onnx=./refine_model.onnx \
+        --saveEngine=./model_best_dynamic.plan \
+        --minShapes=input1:1x160x160x6,input2:1x160x160x6 \
+        --optShapes=input1:1x160x160x6,input2:1x160x160x6 \
+        --maxShapes=input1:252x160x160x6,input2:252x160x160x6
+
+```
+
+
+https://github.com/JustinLungu/FoundationPose_DockerFix
+https://github.com/onnx/onnx/issues/2182#issuecomment-513888258
