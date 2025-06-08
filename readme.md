@@ -55,6 +55,18 @@ year          = {2023},
 }
 ```
 
+# TensorRT & Onnx Inference
+
+* Follow the instructions for data and model file structure from [Data prepare](#data-prepare) section above
+* Download onnx weights from [FoundationPose NGC Catalog](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/isaac/models/foundationpose) and rename them as:
+
+    > 2024-01-11-20-02-45 -> score_model.onnx -> model_best.onnx
+
+    > 2023-10-28-18-33-37 -> refine_model.onnx -> model_best.onnx
+
+
+
+
 # Data prepare
 
 
@@ -66,68 +78,55 @@ year          = {2023},
 
 1) [Optional] Download our preprocessed reference views [here](https://drive.google.com/drive/folders/1PXXCOJqHXwQTbwPwPbGDN9_vLVe0XpFS?usp=sharing) in order to run model-free few-shot version.
 
-# Env setup option 1: docker (recommended)
-  ```
-  cd docker/
-  docker pull wenbowen123/foundationpose && docker tag wenbowen123/foundationpose foundationpose  # Or to build from scratch: docker build --network host -t foundationpose .
-  bash docker/run_container.sh
-  ```
 
 
-If it's the first time you launch the container, you need to build extensions. Run this command *inside* the Docker container.
-```
-bash build_all.sh
-```
 
-Later you can execute into the container without re-build.
-```
-docker exec -it foundationpose bash
-```
+# Docker Installation (recommended)
 
-For more recent GPU such as 4090, refer to [this](https://github.com/NVlabs/FoundationPose/issues/27).
-In short, do the following:
-```
-docker pull shingarey/foundationpose_custom_cuda121:latest
-```
-Then modify the bash script to use this image instead of `foundationpose:latest`.
-
-
-# Env setup option 2: conda (experimental)
-
-- Setup conda environment
 
 ```bash
-# create conda environment
-conda create -n foundationpose python=3.9
+docker build --network host -f docker/dockerfile -t foundationpose .
+bash docker/run_container.sh
 
-# activate conda environment
-conda activate foundationpose
+# inside container
+bash build_all.sh
 
-# Install Eigen3 3.4.0 under conda environment
-conda install conda-forge::eigen=3.4.0
-export CMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH:/eigen/path/under/conda"
+pip install onnxruntime-gpu onnx \
+  tensorrt \
+  pycuda \
+  cuda-python
 
-# install dependencies
-python -m pip install -r requirements.txt
+apt-get update && apt-get install -y \
+  libnvinfer10 \
+  libnvinfer-plugin10 \
+  libnvonnxparsers10 \
+  libnvinfer-dispatch10 \
+  libnvinfer-bin \
+  tensorrt
 
-# Install NVDiffRast
-python -m pip install --quiet --no-cache-dir git+https://github.com/NVlabs/nvdiffrast.git
 
-# Kaolin (Optional, needed if running model-free setup)
-python -m pip install --quiet --no-cache-dir kaolin==0.15.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.0.0_cu118.html
+# converting to tensorrt
+# refine_model
+cd weights/2023-10-28-18-33-37
+trtexec --onnx=./refine_model.onnx --saveEngine=./model_best_dynamic.plan --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6
 
-# PyTorch3D
-python -m pip install --quiet --no-index --no-cache-dir pytorch3d -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py39_cu118_pyt200/download.html
-
-# Build extensions
-CMAKE_PREFIX_PATH=$CONDA_PREFIX/lib/python3.9/site-packages/pybind11/share/cmake/pybind11 bash build_all_conda.sh
+# score_model
+cd weights/2024-01-11-20-02-45
+trtexec --onnx=./model_best.onnx --saveEngine=./model_best_dynamic.plan --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6
 ```
-
 
 # Run model-based demo
 The paths have been set in argparse by default. If you need to change the scene, you can pass the args accordingly. By running on the demo data, you should be able to see the robot manipulating the mustard bottle. Pose estimation is conducted on the first frame, then it automatically switches to tracking mode for the rest of the video. The resulting visualizations will be saved to the `debug_dir` specified in the argparse. (Note the first time running could be slower due to online compilation)
-```
+
+```bash
+# pytorch
 python run_demo.py
+
+# onnx
+python run_demo.py --use_onnx
+
+# tensorrt
+python run_demo.py --use_tensorrt
 ```
 
 
@@ -169,6 +168,19 @@ python run_ycb_video.py --ycbv_dir /mnt/9a72c439-d0a7-45e8-8d20-d7a235d02763/DAT
 
 - If you are getting unreasonable results, check [this](https://github.com/NVlabs/FoundationPose/issues/44#issuecomment-2048141043) and [this](https://github.com/030422Lee/FoundationPose_manual)
 
+- Try following commands if above installation gives errors later on:
+
+  ```bash
+  pip install onnxruntime-gpu --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
+
+  apt install ./nv-tensorrt-local-repo-ubuntu2204-10.11.0-cuda-12.9_1.0-1_amd64.deb
+
+  git clone https://github.com/onnx/onnx-tensorrt.git
+  cd onnx-tensorrt
+  pip install tensorrt
+  ```
+
+
 # Training data download
 Our training data include scenes using 3D assets from GSO and Objaverse, rendered with high quality photo-realism and large domain randomization. Each data point includes **RGB, depth, object pose, camera pose, instance segmentation, 2D bounding box**. [[Google Drive]](https://drive.google.com/drive/folders/1s4pB6p4ApfWMiMjmTXOFco8dHbNXikp-?usp=sharing).
 
@@ -203,7 +215,6 @@ Our training data include scenes using 3D assets from GSO and Objaverse, rendere
   ```
 
 
-
 # Notes
 Due to the legal restrictions of Stable-Diffusion that is trained on LAION dataset, we are not able to release the diffusion-based texture augmented data, nor the pretrained weights using it. We thus release the version without training on diffusion-augmented data. Slight performance degradation is expected.
 
@@ -220,65 +231,3 @@ The code and data are released under the NVIDIA Source Code License. Copyright Â
 
 # Contact
 For questions, please contact [Bowen Wen](https://wenbowen123.github.io/).
-
-## Notes
-weights
-2024-01-11-20-02-45 -> score_model.onnx -> model_best.onnx
-2023-10-28-18-33-37 -> refine_model.onnx -> model_best.onnx
-
-```bash
-python run_demo.py --use_onnx
-```
-
-installations
-
-```bash
-
-pip install tensorrt
-pip install pycuda
-pip3 install cuda-python
-
-Follow instructions from FS
-```
-
-```bash
-docker pull nvcr.io/nvidia/tensorrt:25.05-py3
-
-xhost +local:docker
-export DIR=$(pwd)
-docker run --gpus all \
-    --env NVIDIA_DISABLE_REQUIRE=1 \
-    -it \
-    --network=host \
-    --name tensorrt \
-    --cap-add=SYS_PTRACE \
-    --security-opt seccomp=unconfined \
-    -v $DIR:$DIR \
-    -v /tmp/.X11-unix:/tmp/.X11-unix \
-    -v /tmp:/tmp  \
-    --ipc=host \
-    -e DISPLAY=${DISPLAY} \
-    nvcr.io/nvidia/tensorrt:25.05-py3
-
-
-apt install ./nv-tensorrt-local-repo-ubuntu2204-10.11.0-cuda-12.9_1.0-1_amd64.deb
-
-# converting to tensorrt
-# refine_model
-trtexec --onnx=./refine_model.onnx --saveEngine=./model_best_dynamic.plan --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6 --explicitBatch --vc
-
-# score_model
-trtexec --onnx=./model_best.onnx --saveEngine=./model_best_dynamic.plan --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6 --vc
-
-
-trtexec --onnx=./refine_model.onnx \
-        --saveEngine=./model_best_dynamic.plan \
-        --minShapes=input1:1x160x160x6,input2:1x160x160x6 \
-        --optShapes=input1:1x160x160x6,input2:1x160x160x6 \
-        --maxShapes=input1:252x160x160x6,input2:252x160x160x6
-
-```
-
-
-https://github.com/JustinLungu/FoundationPose_DockerFix
-https://github.com/onnx/onnx/issues/2182#issuecomment-513888258

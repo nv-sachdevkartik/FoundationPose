@@ -22,7 +22,7 @@ from datareader import *
 import onnxruntime as ort
 import tensorrt as trt
 from onnx_tensorrt import tensorrt_engine
-from .tensorrt_infer2 import TensorRTInfer
+from .tensorrt_infer import TensorRTInfer
 
 @torch.inference_mode()
 def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_ratio, xyz_map, normal_map=None, mesh_diameter=None, cfg=None, glctx=None, mesh_tensors=None, dataset:PoseRefinePairH5Dataset=None):
@@ -160,33 +160,6 @@ class PoseRefinePredictor:
     logging.info("init done")
     self.last_trans_update = None
     self.last_rot_update = None
-
-  def load_engine_model(self):
-    try:
-      if not os.path.exists(self.engine_path):
-        raise FileNotFoundError(f"TensorRT engine file not found: {self.engine_path}")
-      
-      logging.info(f"Loading TensorRT engine from {self.engine_path}")
-      runtime = trt.Runtime(trt.Logger(trt.Logger.WARNING))
-
-      with open(self.engine_path, 'rb') as file:
-        engine_data = file.read()
-        engine = runtime.deserialize_cuda_engine(engine_data) 
-      self.engine = tensorrt_engine.Engine(engine)
-
-      if self.engine is None:
-        raise RuntimeError("Failed to convert TensorRT engine")
-        logging.info("TensorRT engine converted failed")
-
-      # if len(engine_data) == 0:
-      #   raise ValueError(f"TensorRT engine file is empty: {self.engine_path}")
-      
-      # Wrap with onnx_tensorrt Engine class
-      # self.engine = tensorrt_engine.Engine(engine)
-      logging.info("TensorRT engine loaded successfully")
-      
-    except Exception as e:
-      logging.error(f"Failed to load TensorRT engine: {e}")
 
   def load_onnx_model(self):
     """Load ONNX model and switch to ONNX inference mode."""
