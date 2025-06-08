@@ -21,6 +21,9 @@ if __name__=='__main__':
   parser.add_argument('--track_refine_iter', type=int, default=2)
   parser.add_argument('--debug', type=int, default=1)
   parser.add_argument('--debug_dir', type=str, default=f'{code_dir}/debug')
+  parser.add_argument('--use_onnx', action='store_true')
+  parser.add_argument('--use_tensorrt', action='store_true')
+
   args = parser.parse_args()
 
   set_logging_format()
@@ -35,8 +38,9 @@ if __name__=='__main__':
   to_origin, extents = trimesh.bounds.oriented_bounds(mesh)
   bbox = np.stack([-extents/2, extents/2], axis=0).reshape(2,3)
 
-  scorer = ScorePredictor()
-  refiner = PoseRefinePredictor()
+  runtime = 'onnx' if args.use_onnx else 'tensorrt' if args.use_tensorrt else 'torch'
+  scorer = ScorePredictor(runtime=runtime) 
+  refiner = PoseRefinePredictor(runtime=runtime)
   glctx = dr.RasterizeCudaContext()
   est = FoundationPose(model_pts=mesh.vertices, model_normals=mesh.vertex_normals, mesh=mesh, scorer=scorer, refiner=refiner, debug_dir=debug_dir, debug=debug, glctx=glctx)
   logging.info("estimator initialization done")
