@@ -137,7 +137,7 @@ class ScorePredictor:
       self.onnx_session = None
       self.load_onnx_model()
     elif self.runtime == 'tensorrt':
-      self.engine_path = f'{code_dir}/../../weights/{self.run_name}/model_best_dynamic.plan'
+      self.engine_path = f'{code_dir}/../../weights/{self.run_name}/model_best.plan'
       self.trt_infer = TensorRTInfer(self.engine_path, batch_size=1, verbose=False)
     else:
       self.model = ScoreNetMultiPair(cfg=self.cfg, c_in=self.cfg['c_in']).cuda()

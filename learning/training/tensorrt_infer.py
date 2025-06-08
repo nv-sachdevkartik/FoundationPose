@@ -163,12 +163,12 @@ import time
 if __name__ == "__main__":
     code_dir = os.path.dirname(os.path.realpath(__file__))
     engine_paths = [
-        f"{code_dir}/../../weights/2023-10-28-18-33-37/model_best_dynamic.plan",
-        f"{code_dir}/../../weights/2024-01-11-20-02-45/model_best_dynamic.plan"
+        f"{code_dir}/../../weights/2023-10-28-18-33-37/model_best.plan",
+        f"{code_dir}/../../weights/2024-01-11-20-02-45/model_best.plan"
     ]
 
     batch_size = 1
-    num_inferences_per_engine = 1000
+    num_inferences_per_engine = 100
 
     for engine_path in engine_paths:
         trt_infer = TensorRTInfer(engine_path, batch_size=batch_size, verbose=False)

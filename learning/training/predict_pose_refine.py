@@ -111,7 +111,7 @@ class PoseRefinePredictor:
       self.onnx_session = None
       self.load_onnx_model()
     elif self.runtime == 'tensorrt':
-      self.engine_path = f'{code_dir}/../../weights/{self.run_name}/model_best_dynamic.plan'
+      self.engine_path = f'{code_dir}/../../weights/{self.run_name}/model_best.plan'
       self.onnx_session = None
       self.trt_infer = TensorRTInfer(self.engine_path, batch_size=252)
       # self.load_engine_model()
