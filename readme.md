@@ -117,13 +117,10 @@ source ~/.bashrc
 cd weights/2023-10-28-18-33-37
 trtexec --onnx=./model_best.onnx --saveEngine=./model_best.plan --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6
 
-trtexec --onnx=./model_best.onnx --saveEngine=./model_best_fp32.plan --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6
-
 # score_model
 cd weights/2024-01-11-20-02-45
 trtexec --onnx=./model_best.onnx --saveEngine=./model_best.plan --fp16 --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6
 
-trtexec --onnx=./model_best.onnx --saveEngine=./model_best_fp32.plan --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6
 
 ```
 
