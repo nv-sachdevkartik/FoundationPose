@@ -119,7 +119,7 @@ def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_rati
 
 
 class ScorePredictor:
-  def __init__(self, amp=True, runtime='torch'):
+  def __init__(self, amp=True, runtime='torch', context=None, verbose=False):
     self.amp = amp
     self.run_name = "2024-01-11-20-02-45"
     self.use_onnx = False
@@ -132,13 +132,15 @@ class ScorePredictor:
     self.cfg = OmegaConf.load(f'{code_dir}/../../weights/{self.run_name}/config.yml')
     
     self.runtime = runtime
+    self.verbose = verbose
     if self.runtime == 'onnx':
       self.onnx_path = f'{code_dir}/../../weights/{self.run_name}/model_best.onnx'
       self.onnx_session = None
       self.load_onnx_model()
     elif self.runtime == 'tensorrt':
       self.engine_path = f'{code_dir}/../../weights/{self.run_name}/model_best.plan'
-      self.trt_infer = TensorRTInfer(self.engine_path, batch_size=1, verbose=False)
+      with open(self.engine_path, "rb") as f, trt.Runtime(trt.Logger(trt.Logger.ERROR)) as runtime:
+          self.engine = runtime.deserialize_cuda_engine(f.read())
     else:
       self.model = ScoreNetMultiPair(cfg=self.cfg, c_in=self.cfg['c_in']).cuda()
       logging.info(f"Using pretrained model from {ckpt_dir}")
@@ -247,8 +249,13 @@ class ScorePredictor:
 
         elif self.runtime == 'tensorrt':
           logging.info("ScorePredictor using tensorrt")
-          output = self.trt_infer.infer([A.cpu().numpy(), B.cpu().numpy()])
-          scores_cur = torch.from_numpy(output[0]).cuda().float().reshape(-1)
+          A = A.permute(0, 2, 3, 1).contiguous()  # NCHW -> NHWC
+          B = B.permute(0, 2, 3, 1).contiguous()  # NCHW -> NHWC
+          
+          # engine=self.engine, 
+          self.trt_infer = TensorRTInfer(engine_path=self.engine_path, batch_size=252, verbose=self.verbose)
+          output = self.trt_infer.infer([A, B], glctx=glctx)
+          scores_cur = output["trans"].reshape(-1)
         
         else:
           with torch.cuda.amp.autocast(enabled=self.amp):

@@ -102,17 +102,29 @@ apt-get update && apt-get install -y \
   libnvonnxparsers10 \
   libnvinfer-dispatch10 \
   libnvinfer-bin \
-  tensorrt
+  tensorrt \
+  cudnn-cuda-12
 
+# Download tensorrt from: https://developer.nvidia.com/tensorrt/download
+apt install ./nv-tensorrt-local-repo-ubuntu2004-10.11.0-cuda-12.9_1.0-1_amd64.deb
+
+# check if trtexec is available in  /usr/src/tensorrt/bin/ 
+echo 'alias trtexec="/usr/src/tensorrt/bin/trtexec"' >> ~/.bashrc
+source ~/.bashrc 
 
 # converting to tensorrt
 # refine_model
 cd weights/2023-10-28-18-33-37
-trtexec --onnx=./model_best.onnx --saveEngine=./model_best_dynamic.plan --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6
+trtexec --onnx=./model_best.onnx --saveEngine=./model_best.plan --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6
+
+trtexec --onnx=./model_best.onnx --saveEngine=./model_best_fp32.plan --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6
 
 # score_model
 cd weights/2024-01-11-20-02-45
-trtexec --onnx=./model_best.onnx --saveEngine=./model_best_dynamic.plan --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6
+trtexec --onnx=./model_best.onnx --saveEngine=./model_best.plan --fp16 --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6
+
+trtexec --onnx=./model_best.onnx --saveEngine=./model_best_fp32.plan --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6
+
 ```
 
 # Run model-based demo
@@ -172,7 +184,6 @@ python run_ycb_video.py --ycbv_dir /mnt/9a72c439-d0a7-45e8-8d20-d7a235d02763/DAT
 
   ```bash
   pip install onnxruntime-gpu --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
-
   apt install ./nv-tensorrt-local-repo-ubuntu2204-10.11.0-cuda-12.9_1.0-1_amd64.deb
 
   git clone https://github.com/onnx/onnx-tensorrt.git

@@ -93,7 +93,7 @@ def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_rati
 
 
 class PoseRefinePredictor:
-  def __init__(self, runtime='torch'):
+  def __init__(self, runtime='torch', context=None, verbose=False):
     logging.info("welcome")
     self.amp = True
     self.run_name = "2023-10-28-18-33-37"
@@ -106,15 +106,16 @@ class PoseRefinePredictor:
     self.cfg['enable_amp'] = True
 
     self.runtime = runtime
+    self.verbose = verbose
     if self.runtime == 'onnx':
       self.onnx_path = f'{code_dir}/../../weights/{self.run_name}/model_best.onnx'
       self.onnx_session = None
       self.load_onnx_model()
     elif self.runtime == 'tensorrt':
       self.engine_path = f'{code_dir}/../../weights/{self.run_name}/model_best.plan'
+      with open(self.engine_path, "rb") as f, trt.Runtime(trt.Logger(trt.Logger.ERROR)) as runtime:
+          self.engine = runtime.deserialize_cuda_engine(f.read())
       self.onnx_session = None
-      self.trt_infer = TensorRTInfer(self.engine_path, batch_size=252)
-      # self.load_engine_model()
     else:
       self.model = RefineNet(cfg=self.cfg, c_in=self.cfg['c_in']).cuda()
       logging.info(f"Using pretrained model from {ckpt_dir}")
@@ -249,17 +250,17 @@ class PoseRefinePredictor:
 
         elif self.runtime == 'tensorrt':
           logging.info("PoseRefinePredictor using tensorrt")
+          A = A.permute(0, 2, 3, 1).contiguous()  # NCHW -> NHWC
+          B = B.permute(0, 2, 3, 1).contiguous()  # NCHW -> NHWC
 
-          output = self.trt_infer.infer([A.cpu().numpy(), B.cpu().numpy()])
-          output = {
-            'trans': torch.from_numpy(output[0]).cuda(),
-            'rot': torch.from_numpy(output[1]).cuda()
-          }
+          # engine=self.engine, 
+          self.trt_infer = TensorRTInfer(engine_path=self.engine_path, batch_size=252, verbose=self.verbose)
+          output = self.trt_infer.infer([A, B], glctx=glctx)
 
         else:
           with torch.cuda.amp.autocast(enabled=self.amp):
             output = self.model(A, B)
-            
+      
         for k in output:
           output[k] = output[k].float()
         logging.info("forward done")

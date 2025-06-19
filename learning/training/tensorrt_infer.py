@@ -22,14 +22,15 @@ import numpy as np
 import tensorrt as trt
 import pycuda.driver as cuda
 from typing import List
+import time
 
 # If you face the following issue:
 #  "pycuda._driver.LogicError: explicit_context_dependent failed: invalid device context - no currently active context?"
 #  Add "import pycuda.autoinit", this is needed to initialize cuda!
-import pycuda.autoinit
+# import pycuda.autoinit
+
 
 TRT_DYNAMIC_DIM = -1
-
 
 class HostDeviceMem(object):
     """Simple helper data class to store Host and Device memory."""
@@ -45,47 +46,11 @@ class HostDeviceMem(object):
     def __repr__(self):
         return self.__str__()
 
-def allocate_buffers(engine: trt.ICudaEngine, batch_size: int, verbose: bool = False) -> [list, list, list]:
-    """
-    Function to allocate buffers and bindings for TensorRT inference.
 
-    Args:
-        engine (trt.ICudaEngine):
-        batch_size (int): batch size to be used during inference.
-
-    Returns:
-        inputs (List): list of input buffers.
-        outputs (List): list of output buffers.
-        dbindings (List): list of device bindings.
-    """
-    inputs = []
-    outputs = []
-    dbindings = []
-
-    for binding in engine:
-        if verbose:
-            print(f"binding: {binding}")
-        binding_shape = engine.get_tensor_shape(binding)
-        if binding_shape[0] == TRT_DYNAMIC_DIM:  # dynamic shape
-            size = batch_size * abs(trt.volume(binding_shape))
-        else:
-            size = abs(trt.volume(binding_shape))
-        dtype = trt.nptype(engine.get_tensor_dtype(binding))
-        host_mem = cuda.pagelocked_empty(size, dtype)
-        device_mem = cuda.mem_alloc(host_mem.nbytes)
-        dbindings.append(int(device_mem))
-
-        # Append to the appropriate list (input/output)
-        if engine.get_tensor_mode(binding) == trt.TensorIOMode.INPUT:
-            inputs.append(HostDeviceMem(host_mem, device_mem, binding))
-        else:
-            outputs.append(HostDeviceMem(host_mem, device_mem, binding))
-
-    return inputs, outputs, dbindings
 
 
 class TensorRTInfer:
-    def __init__(self, engine_path: str, batch_size: int = 1, verbose: bool = False):
+    def __init__(self, engine=None, engine_path: str = None, batch_size: int = 1, verbose: bool = False):
         """
         Initialize TensorRT inference engine.
 
@@ -97,68 +62,117 @@ class TensorRTInfer:
         self.engine_path = engine_path
         self.verbose = verbose
 
-        # Load engine
-        with open(engine_path, "rb") as f, trt.Runtime(trt.Logger(trt.Logger.ERROR)) as runtime:
-            self.engine = runtime.deserialize_cuda_engine(f.read())
-            
-        # Allocate buffers
-        self.inputs, self.outputs, self.dbindings = allocate_buffers(self.engine, batch_size, verbose=self.verbose)
-        if self.verbose:
-            print(f"num of inputs: {len(self.inputs)}")
-            print(f"num of outputs: {len(self.outputs)}")
-            print(f"num of dbindings: {len(self.dbindings)}")
+        if engine is not None:
+            self.engine = engine
+        else:
+            # Load engine
+            assert engine_path is not None, "engine_path is required when engine is not provided"
+            with open(engine_path, "rb") as f, trt.Runtime(trt.Logger(trt.Logger.ERROR)) as runtime:
+                self.engine = runtime.deserialize_cuda_engine(f.read())
+
+
+    def infer(self, input_tensors_list, glctx=None):
+        """
+        Safe TensorRT integration with existing nvdiffrast context for multiple inputs/outputs
         
-        # Create execution context
+        Args:
+            input_tensors_list: List of PyTorch tensors for input
+            glctx: nvdiffrast RasterizeCudaContext (already created)
+        
+        Returns:
+            Dictionary mapping output tensor names to PyTorch tensors
+        """
+
+        # Ensure PyTorch CUDA context is established
+        if not input_tensors_list[0].is_cuda:
+            input_tensors_list = [tensor.cuda() for tensor in input_tensors_list]
+
+        # torch.cuda.set_device(0)
         self.context = self.engine.create_execution_context()
         
-        # Set input shapes
-        for binding in self.engine:
-            binding_shape = self.engine.get_tensor_shape(binding)
+        # Process all input and output tensors
+        output_tensors_dict = {
+            'trans': [],
+            'rot': []
+        }
+
+        # Debug: Print engine information
+        if self.verbose:
+            print(f"Engine has {self.engine.num_io_tensors} I/O tensors")
+        
+        input_tensor_names = []
+        for i in range(self.engine.num_io_tensors):
+            tensor_name = self.engine.get_tensor_name(i)
+            tensor_mode = self.engine.get_tensor_mode(tensor_name)
+            tensor_shape = self.engine.get_tensor_shape(tensor_name)
+            tensor_dtype = self.engine.get_tensor_dtype(tensor_name)
             if self.verbose:
-                print(f"binding: {binding}, shape: {binding_shape}")
-
-            if self.engine.get_tensor_mode(binding) == trt.TensorIOMode.INPUT:
-                if TRT_DYNAMIC_DIM in binding_shape:
-                    binding_shape = tuple([batch_size if dim == TRT_DYNAMIC_DIM else dim for dim in binding_shape])
-                self.context.set_input_shape(binding, binding_shape)
-
-    def infer(self, images: List[np.ndarray]) -> np.ndarray:
-        """
-        Run inference on two input images.
-
-        Args:
-            image1 (np.ndarray): First input image of shape (batch_size, 3, 160, 160)
-            image2 (np.ndarray): Second input image of shape (batch_size, 3, 160, 160)
-
-        Returns:
-            np.ndarray: Model output
-        """
+                print(f"Tensor {i}: name={tensor_name}, mode={tensor_mode}, shape={tensor_shape}, dtype={tensor_dtype}")
+            
+            if tensor_mode == trt.TensorIOMode.INPUT:
+                input_tensor_names.append(tensor_name)
         
-        # Copy input data to host buffer
-        for i in range(len(self.inputs)):
-            np.copyto(self.inputs[i].host, images[i].ravel())
+        if self.verbose:
+            print(f"Input tensor names: {input_tensor_names}")
+            print(f"Number of input tensors provided: {len(input_tensors_list)}")
         
-        # Transfer input to device
-        for i in range(len(self.inputs)):
-            cuda.memcpy_htod(self.inputs[i].device, self.inputs[i].host)
+        # Set input tensors
+        for i, tensor_name in enumerate(input_tensor_names):
+            if i < len(input_tensors_list):
+                input_tensor = input_tensors_list[i]
+                if self.verbose:
+                    print(f"Setting input {i}: {tensor_name} with shape {input_tensor.shape}")
+                binding_shape = tuple(input_tensor.shape)
+                binding_shape = tuple([self.batch_size if dim == TRT_DYNAMIC_DIM else dim for dim in binding_shape])
+                self.context.set_input_shape(tensor_name, tuple(input_tensor.shape))
+                self.context.set_tensor_address(tensor_name, input_tensor.data_ptr())
 
-        # Run inference
-        self.context.execute_v2(self.dbindings)
+        for i in range(self.engine.num_io_tensors):
+            tensor_name = self.engine.get_tensor_name(i)
+            tensor_mode = self.engine.get_tensor_mode(tensor_name)
+            
+            if tensor_mode == trt.TensorIOMode.OUTPUT:
+                # Handle output tensors
+                output_shape = tuple(self.context.get_tensor_shape(tensor_name))
+                if self.verbose:
+                    print(f"Creating output tensor: {tensor_name} with shape {output_shape}")
+                
+                # Determine output dtype based on engine
+                engine_dtype = self.engine.get_tensor_dtype(tensor_name)
+                if engine_dtype == trt.DataType.FLOAT:
+                    output_dtype = torch.float32
+                elif engine_dtype == trt.DataType.HALF:
+                    output_dtype = torch.float16
+                else:
+                    output_dtype = torch.float32  # Default fallback
+                
+                output_tensor = torch.empty(
+                    output_shape, 
+                    dtype=output_dtype, 
+                    device=input_tensors_list[0].device
+                )
+                if tensor_name == "output1":
+                    output_tensors_dict['trans'] = output_tensor
+                elif tensor_name == "output2":
+                    output_tensors_dict['rot'] = output_tensor
+                self.context.set_tensor_address(tensor_name, output_tensor.data_ptr())
         
-        # Transfer output back to host
-        for i in range(len(self.outputs)):
-            cuda.memcpy_dtoh(self.outputs[i].host, self.outputs[i].device)
-        output = [np.array(self.outputs[i].host) for i in range(len(self.outputs))]
+        # Verify all binding shapes are specified
+        assert self.context.all_binding_shapes_specified, "Not all input shapes are specified"
+        
+        # Execute inference using current stream (shared with nvdiffrast)
+        current_stream = torch.cuda.current_stream()
+        self.context.execute_async_v3(stream_handle=current_stream.cuda_stream)
+        
+        return output_tensors_dict
 
-        return output
 
     def __del__(self):
         """Cleanup CUDA resources"""
-        del self.context
-        del self.engine
-
-
-import time
+        if hasattr(self, 'context') and self.context is not None:
+            del self.context
+        if hasattr(self, 'engine'):
+            del self.engine
 
 if __name__ == "__main__":
     code_dir = os.path.dirname(os.path.realpath(__file__))
@@ -167,17 +181,31 @@ if __name__ == "__main__":
         f"{code_dir}/../../weights/2024-01-11-20-02-45/model_best.plan"
     ]
 
-    batch_size = 1
-    num_inferences_per_engine = 100
+    max_batch_size = 252
+    num_inferences_per_engine = 10
+    
+    import nvdiffrast.torch as dr
+    glctx = dr.RasterizeCudaContext()
 
-    for engine_path in engine_paths:
-        trt_infer = TensorRTInfer(engine_path, batch_size=batch_size, verbose=False)
+    total_inference_time = [0.0 for _ in range(len(engine_paths))]
+    for j, engine_path in enumerate(engine_paths):
+        trt_infer = TensorRTInfer(engine_path=engine_path, batch_size=max_batch_size, verbose=False)
         for i in range(num_inferences_per_engine):
-            image1 = np.random.randn(batch_size, 6, 160, 160).astype(np.float32)
-            image2 = np.random.randn(batch_size, 6, 160, 160).astype(np.float32)
+            batch_size = np.random.randint(1, max_batch_size + 1)
+            input_tensor1 = torch.randn((batch_size, 160, 160, 6), dtype=torch.float32).to("cuda")
+            input_tensor2 = torch.randn((batch_size, 160, 160, 6), dtype=torch.float32).to("cuda")
+
             start_time = time.time()
-            output = trt_infer.infer([image1, image2])
+
+            output = trt_infer.infer([input_tensor1, input_tensor2])
             end_time = time.time()
+
             inference_time = (end_time - start_time) * 1000  # Convert to milliseconds
+            total_inference_time[j] += inference_time
             print(f"Running inference {i+1}/{num_inferences_per_engine} | Inference time: {inference_time:.2f} ms")
-            # print(f"Output: {output}")
+
+    print("-"*100)
+    for j in range(len(engine_paths)):
+        print(f"Average inference time for Model {j}: {total_inference_time[j] / num_inferences_per_engine:.2f} ms")
+
+

@@ -39,9 +39,12 @@ if __name__=='__main__':
   bbox = np.stack([-extents/2, extents/2], axis=0).reshape(2,3)
 
   runtime = 'onnx' if args.use_onnx else 'tensorrt' if args.use_tensorrt else 'torch'
-  scorer = ScorePredictor(runtime=runtime) 
-  refiner = PoseRefinePredictor(runtime=runtime)
+
   glctx = dr.RasterizeCudaContext()
+  scorer = ScorePredictor(runtime=runtime, context=glctx, verbose=False) 
+  refiner = PoseRefinePredictor(runtime=runtime, context=glctx, verbose=False)
+
+
   est = FoundationPose(model_pts=mesh.vertices, model_normals=mesh.vertex_normals, mesh=mesh, scorer=scorer, refiner=refiner, debug_dir=debug_dir, debug=debug, glctx=glctx)
   logging.info("estimator initialization done")
 
