@@ -89,39 +89,26 @@ docker build --network host -f docker/dockerfile -t foundationpose .
 bash docker/run_container.sh
 
 # inside container
+cd FoundationPose
 bash build_all.sh
 
-pip install onnxruntime-gpu onnx \
-  tensorrt \
-  pycuda \
-  cuda-python
-
-apt-get update && apt-get install -y \
-  libnvinfer10 \
-  libnvinfer-plugin10 \
-  libnvonnxparsers10 \
-  libnvinfer-dispatch10 \
-  libnvinfer-bin \
-  tensorrt \
-  cudnn-cuda-12
-
-# Download tensorrt from: https://developer.nvidia.com/tensorrt/download
-apt install ./nv-tensorrt-local-repo-ubuntu2004-10.11.0-cuda-12.9_1.0-1_amd64.deb
-
-# check if trtexec is available in  /usr/src/tensorrt/bin/ 
-echo 'alias trtexec="/usr/src/tensorrt/bin/trtexec"' >> ~/.bashrc
-source ~/.bashrc 
-
+cd ..
+git clone https://github.com/onnx/onnx-tensorrt.git
+cd onnx-tensorrt
+python3 setup.py install
+  
 # converting to tensorrt
 # refine_model
+cd ../FoundationPose
 cd weights/2023-10-28-18-33-37
-trtexec --onnx=./model_best.onnx --saveEngine=./model_best.plan --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6
+trtexec --onnx=./model_best.onnx --saveEngine=./model_best.plan --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:252x160x160x6,input2:252x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6
 
 # score_model
-cd weights/2024-01-11-20-02-45
-trtexec --onnx=./model_best.onnx --saveEngine=./model_best.plan --fp16 --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:1x160x160x6,input2:1x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6
+cd ../2024-01-11-20-02-45
+trtexec --onnx=./model_best.onnx --saveEngine=./model_best.plan --fp16 --minShapes=input1:1x160x160x6,input2:1x160x160x6 --optShapes=input1:252x160x160x6,input2:252x160x160x6 --maxShapes=input1:252x160x160x6,input2:252x160x160x6
 
-
+# back to root dir
+cd ../../
 ```
 
 # Run model-based demo

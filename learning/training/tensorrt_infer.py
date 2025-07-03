@@ -70,6 +70,7 @@ class TensorRTInfer:
             with open(engine_path, "rb") as f, trt.Runtime(trt.Logger(trt.Logger.ERROR)) as runtime:
                 self.engine = runtime.deserialize_cuda_engine(f.read())
 
+        self.context = self.engine.create_execution_context()
 
     def infer(self, input_tensors_list, glctx=None):
         """
@@ -87,8 +88,6 @@ class TensorRTInfer:
         if not input_tensors_list[0].is_cuda:
             input_tensors_list = [tensor.cuda() for tensor in input_tensors_list]
 
-        # torch.cuda.set_device(0)
-        self.context = self.engine.create_execution_context()
         
         # Process all input and output tensors
         output_tensors_dict = {
